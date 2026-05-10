@@ -42,7 +42,7 @@ run = "pm2 stop {{env.APP_NAME}}"
 run = "pm2 logs {{env.APP_NAME}}"
 `;
 } else {
-  appCmd = getArg('cmd') || 'uv run uvicorn main:app --host 0.0.0.0 --port 8080';
+  appCmd = getArg('cmd') || 'uv run main.py';
   miseExtra = '';
 }
 
