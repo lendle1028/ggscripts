@@ -47,13 +47,101 @@ function getArg(name) {
   return index !== -1 ? args[index + 1] : null;
 }
 
-const modeName = getArg('mode') || 'default';
-const appName  = getArg('name') || 'my-app';
+const hasMode = args.includes('--mode');
+const hasName = args.includes('--name');
+
+let modeName, appName;
+
+if (!hasMode && !hasName) {
+  // ── Interactive mode ──
+
+  const tty = process.stdin.isTTY;
+
+  // Non-TTY: read all piped input upfront
+  if (!tty) {
+    (async () => {
+      const chunks = [];
+      for await (const c of process.stdin) chunks.push(c);
+      const lines = Buffer.concat(chunks).toString('utf8').trim().split('\n');
+      appName = (lines[0] || '').trim() || 'my-app';
+      modeName = (lines[1] || '').trim().toLowerCase() === 'pm2' ? 'pm2' : 'default';
+      proceed();
+    })();
+  } else {
+    // TTY: interactive prompts with readline
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+    function ask(question) {
+      return new Promise(resolve => rl.question(question, resolve));
+    }
+
+    async function selectMode() {
+      const modes = ['default', 'pm2'];
+
+      console.log('\n請選擇模式 (使用上下鍵移動, Enter 確認):');
+
+      let selectedIndex = 0;
+      const render = () => {
+        modes.forEach((m, i) => {
+          const indicator = i === selectedIndex ? ' >' : '  ';
+          const label = i === selectedIndex ? `\x1b[36m${indicator} ${m}\x1b[0m` : `  ${m}`;
+          console.log(label);
+        });
+      };
+
+      return new Promise(resolve => {
+        const stdin = process.stdin;
+        const raw = stdin.isRaw;
+        stdin.setRawMode(true);
+        stdin.resume();
+        render();
+
+        const onData = (key) => {
+          const buf = Buffer.from(key);
+          if (buf[0] === 0x1b && buf[1] === 0x5b) {
+            if (buf[2] === 0x41) { // up
+              selectedIndex = (selectedIndex - 1 + modes.length) % modes.length;
+            } else if (buf[2] === 0x42) { // down
+              selectedIndex = (selectedIndex + 1) % modes.length;
+            }
+            process.stdout.write(`\x1b[${modes.length}A`);
+            modes.forEach((_, i) => {
+              process.stdout.write('\x1b[2K\x1b[1A');
+            });
+            render();
+          } else if (buf[0] === 0x0d) { // enter
+            stdin.setRawMode(raw);
+            stdin.pause();
+            stdin.removeListener('data', onData);
+            resolve(modes[selectedIndex]);
+          }
+        };
+        stdin.on('data', onData);
+      });
+    }
+
+    (async () => {
+      const name = await ask('請問 app 名稱: ');
+      appName = name.trim() || 'my-app';
+      rl.close();
+      modeName = await selectMode();
+      proceed();
+    })();
+  }
+} else {
+  modeName = getArg('mode') || 'default';
+  appName  = getArg('name') || 'my-app';
+  proceed();
+}
+
+function proceed() {
+  const cmdArg = getArg('cmd');
 
 let appCmd;
 let miseExtra;
 if (modeName === 'pm2') {
-  appCmd = getArg('cmd') || 'uv run uvicorn main:app --host 0.0.0.0 --port 8080';
+  appCmd = cmdArg || 'uv run uvicorn main:app --host 0.0.0.0 --port 8080';
   miseExtra = `
 [tasks.pm2-start]
 run = "pm2 start '{{env.APP_CMD}}' --name {{env.APP_NAME}}"
@@ -72,7 +160,7 @@ run = "pm2 stop {{env.APP_NAME}}"
 run = "pm2 logs {{env.APP_NAME}}"
 `;
 } else {
-  appCmd = getArg('cmd') || 'uv run main.py';
+  appCmd = cmdArg || 'uv run main.py';
   miseExtra = '';
 }
 
@@ -105,3 +193,4 @@ for (const [file, content] of [['gg.toml', ggToml], ['mise.toml', miseToml]]) {
 }
 
 console.log('[setup] Done. You can now run: ./gg.cmd mise run ${command}');
+}
